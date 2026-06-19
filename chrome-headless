@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# CHROME_BIN shim for running Chrome inside the container (Karma/Selenium/etc.).
+# Forces the flags a containerized Chrome needs, so project configs that just
+# say `browsers: ['Chrome']` work unchanged:
+#   --no-sandbox            Chrome's sandbox needs user namespaces that aren't
+#                           available nested in rootless Podman.
+#   --headless=new          no display in the container.
+#   --disable-gpu           no GPU in the container.
+#   --disable-dev-shm-usage default /dev/shm is tiny here and crashes Chrome.
+exec /usr/bin/google-chrome-stable \
+  --no-sandbox \
+  --headless=new \
+  --disable-gpu \
+  --disable-dev-shm-usage \
+  "$@"

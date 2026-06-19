@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# claude-box: run Claude Code inside a rootless-Podman sandbox.
+#
+# Inside the box, Claude can read/write everything under ~/git and use its own
+# config, but the rest of your home (~/.ssh, cloud creds, browser data, ...)
+# and host root (your passwordless sudo) are simply not present. Permission
+# prompts are bypassed because the OS isolation is the real boundary.
+#
+# Usage:
+#   cd ~/git/<project> && claude-box                # start Claude (yolo mode)
+#   cd ~/git/<project> && claude-box "fix the bug"  # with an initial prompt
+#   claude-box bash                                 # shell inside the sandbox
+#   claude-box --rebuild                            # rebuild the image
+set -euo pipefail
+
+IMAGE="claude-box:latest"
+GIT_DIR="$HOME/git"
+HOMEDIR="/home/ubuntu"   # in-container home (Ubuntu 24.04 'ubuntu' user, UID 1000)
+
+# Resolve symlinks so SCRIPT_DIR is the real source dir (this script is
+# symlinked into ~/.local/bin) — otherwise --rebuild can't find the Containerfile.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Build on demand: explicit --rebuild, or automatically on first run.
+if [ "${1:-}" = "--rebuild" ]; then
+  shift
+  podman build -t "$IMAGE" "$SCRIPT_DIR"
+elif ! podman image exists "$IMAGE"; then
+  echo "claude-box: building image (first run, this takes a minute)..." >&2
+  podman build -t "$IMAGE" "$SCRIPT_DIR"
+fi
+
+# Refuse to run from outside ~/git so we never accidentally expose other paths.
+case "$PWD" in
+  "$GIT_DIR" | "$GIT_DIR"/*) ;;
+  *) echo "claude-box: cd into $GIT_DIR (or a subdir) first (cwd: $PWD)" >&2; exit 1 ;;
+esac
+
+# Mount ~/git and Claude's own config only — nothing else from your home.
+mounts=( -v "$GIT_DIR:$GIT_DIR" )
+[ -e "$HOME/.claude" ]      && mounts+=( -v "$HOME/.claude:$HOMEDIR/.claude" )
+[ -e "$HOME/.claude.json" ] && mounts+=( -v "$HOME/.claude.json:$HOMEDIR/.claude.json" )
+[ -e "$HOME/.gitconfig" ]   && mounts+=( -v "$HOME/.gitconfig:$HOMEDIR/.gitconfig:ro" )
+
+# Share uv's managed Pythons so uv-managed projects reuse them. uv's package
+# cache lives under ~/git (already mounted) at ~/git/.cache/uv — see
+# UV_CACHE_DIR in the Containerfile — so hardlinks into venvs work.
+[ -e "$HOME/.local/share/uv" ] && mounts+=( -v "$HOME/.local/share/uv:$HOMEDIR/.local/share/uv" )
+
+envs=( -e "TERM=${TERM:-xterm-256color}" )
+[ -n "${ANTHROPIC_API_KEY:-}" ] && envs+=( -e ANTHROPIC_API_KEY )
+
+exec podman run --rm -it \
+  --userns=keep-id \
+  "${mounts[@]}" \
+  "${envs[@]}" \
+  -w "$PWD" \
+  "$IMAGE" "$@"

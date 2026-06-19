@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Container entrypoint. With no args (or any claude args) it launches Claude
+# Code with permission prompts bypassed — safe here because the *container*,
+# not Claude's allowlist, is the security boundary. Pass `bash` (or `shell`)
+# as the first arg to drop into a shell instead, e.g. for poking around or
+# running a one-off command: `claude-box bash -c 'python3.12 --version'`.
+set -e
+case "${1:-}" in
+  bash | shell | sh)
+    shift
+    exec bash "$@"
+    ;;
+  *)
+    exec claude --dangerously-skip-permissions "$@"
+    ;;
+esac
