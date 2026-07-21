@@ -42,9 +42,15 @@ ship `libssl3`, so `ssl`/`hashlib` work (a from-source 2.7.18 build would not,
 as upstream 2.7 predates OpenSSL 3.0). The only friction is noble's `time_t64`
 transition, which renamed `libdb5.3` → `libdb5.3t64`; it still provides
 `libdb-5.3.so`, so the build installs that lib and `--force-depends` past the
-one stale jammy dependency name. `apt-get download` fetches only those four
+one stale jammy dependency name. `apt-get download` fetches only those seven
 packages, so nothing else bleeds in from jammy. This is a stopgap for legacy
 Python 2 scripts, not a maintained interpreter.
+
+The 2.7 headers (`python2.7-dev`) are installed too, so `pip2` can build C
+extensions — `psycopg2` against `libpq-dev` is the case this was added for. They
+live in the same build step as the runtime on purpose: the `-dev` packages carry
+strict `= <version>` dependencies on `libpython2.7-stdlib`, so splitting them
+across layers risks a version skew.
 
 `uv` (pinned to the host's 0.7.19) and `uvx` are also installed. uv's managed
 Pythons (`~/.local/share/uv`) are shared into the box, and uv's package cache
@@ -91,7 +97,8 @@ SQLite instead, `php8.3-sqlite3` is already installed and needs no setup.
 `build-essential` (gcc/g++/make/libc headers), `libpq-dev`, and `python3.12-dev`
 are installed so packages without a usable wheel can be compiled in place — most
 often `psycopg2`, which needs `pg_config` and the libpq headers from `libpq-dev`
-plus `Python.h` from `python3.12-dev`. Since there is no `sudo` in the box,
+plus `Python.h` from `python3.12-dev` (or `python2.7-dev` for the py2 build).
+`libpq-dev` is interpreter-agnostic and serves both. Since there is no `sudo` in the box,
 anything else a source build needs has to be added to the `Containerfile`
 followed by a `claude-box --rebuild`.
 

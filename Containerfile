@@ -75,8 +75,9 @@ RUN chmod +x /usr/local/bin/pg-tmp
 # C toolchain + headers for building native extensions from source — pip/uv fall
 # back to compiling when a project pins a version with no manylinux wheel (e.g.
 # psycopg2, which needs libpq-dev's pg_config and libpq headers, plus Python.h
-# from python3.12-dev). Kept as its own layer, after the language runtimes, so
-# adding to it doesn't invalidate them.
+# from python3.12-dev). libpq-dev is interpreter-agnostic, so it also covers
+# python2 builds; the py2 headers come from jammy in the layer below. Kept as its
+# own layer, after the language runtimes, so adding to it doesn't invalidate them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential libpq-dev python3.12-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -88,24 +89,36 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # renamed only libdb5.3 -> libdb5.3t64 among the deps we need; it still provides
 # libdb-5.3.so, so we install it first and --force-depends past the one jammy
 # Depends line that still names the pre-t64 package. `apt-get download` (not a
-# full jammy pin) resolves the current jammy version and grabs *only* these four
+# full jammy pin) resolves the current jammy version and grabs *only* these seven
 # packages, so nothing else leaks in from jammy. python2 -> python2.7 and pip2
 # (last py2 pip via get-pip) are added so legacy scripts run unchanged.
+#
+# The -dev packages (libpython2.7, libpython2.7-dev, python2.7-dev) are here
+# rather than in the build-toolchain layer above because they carry strict
+# `= <version>` depends on libpython2.7-stdlib: they have to be downloaded and
+# unpacked in the same step as the runtime or the versions can skew. jammy-security
+# is listed alongside jammy so every one of them resolves to the patched
+# 2.7.18-13ubuntu1.5 (plain `jammy` alone still offers 13ubuntu1). libexpat1-dev
+# is noble's and satisfies the one build-dep the py2 headers name.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         libdb5.3t64 libncursesw6 libtinfo6 \
-        libbz2-1.0 libffi8 libexpat1 libnsl2 libtirpc3 \
+        libbz2-1.0 libffi8 libexpat1 libexpat1-dev libnsl2 libtirpc3 \
         libreadline8 libsqlite3-0 libssl3 libcrypt1 media-types; \
-    echo 'deb http://archive.ubuntu.com/ubuntu jammy main universe' \
-        > /etc/apt/sources.list.d/jammy-py2.list; \
+    { echo 'deb http://archive.ubuntu.com/ubuntu jammy main universe'; \
+      echo 'deb http://security.ubuntu.com/ubuntu jammy-security main universe'; \
+    } > /etc/apt/sources.list.d/jammy-py2.list; \
     apt-get update; \
     ( cd /tmp && apt-get download \
-        libpython2.7-minimal python2.7-minimal libpython2.7-stdlib python2.7 ); \
+        libpython2.7-minimal python2.7-minimal libpython2.7-stdlib python2.7 \
+        libpython2.7 libpython2.7-dev python2.7-dev ); \
     rm /etc/apt/sources.list.d/jammy-py2.list; \
     dpkg -i --force-depends \
         /tmp/libpython2.7-minimal_*.deb /tmp/python2.7-minimal_*.deb \
-        /tmp/libpython2.7-stdlib_*.deb /tmp/python2.7_*.deb; \
+        /tmp/libpython2.7-stdlib_*.deb /tmp/python2.7_*.deb \
+        /tmp/libpython2.7_*.deb /tmp/libpython2.7-dev_*.deb \
+        /tmp/python2.7-dev_*.deb; \
     ln -sf /usr/bin/python2.7 /usr/local/bin/python2; \
     curl -fsSL https://bootstrap.pypa.io/pip/2.7/get-pip.py -o /tmp/get-pip.py; \
     python2 /tmp/get-pip.py; \
