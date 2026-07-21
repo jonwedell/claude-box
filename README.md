@@ -33,6 +33,19 @@ That means `source venv/bin/activate` works unchanged inside the box for the
 Flask projects. `python3.12-venv` and `pip` are installed so new venvs can be
 created in-container too.
 
+### Python 2
+
+Ubuntu 24.04 removed Python 2 from its own repos, so `python2.7` (plus `python2`
+and `pip2`) is pulled from **jammy** (22.04)'s `.deb`s — version
+`2.7.18-13ubuntu1.5` — which is patched for OpenSSL 3.0. Both jammy and noble
+ship `libssl3`, so `ssl`/`hashlib` work (a from-source 2.7.18 build would not,
+as upstream 2.7 predates OpenSSL 3.0). The only friction is noble's `time_t64`
+transition, which renamed `libdb5.3` → `libdb5.3t64`; it still provides
+`libdb-5.3.so`, so the build installs that lib and `--force-depends` past the
+one stale jammy dependency name. `apt-get download` fetches only those four
+packages, so nothing else bleeds in from jammy. This is a stopgap for legacy
+Python 2 scripts, not a maintained interpreter.
+
 `uv` (pinned to the host's 0.7.19) and `uvx` are also installed. uv's managed
 Pythons (`~/.local/share/uv`) are shared into the box, and uv's package cache
 is relocated to `~/git/.cache/uv` (set via `UV_CACHE_DIR` in the image and
@@ -55,6 +68,33 @@ along with `composer` for dependency management. If a project needs an extension
 that isn't bundled, add the matching `php8.3-*` package to the `Containerfile`
 and `claude-box --rebuild`.
 
+## PostgreSQL (ephemeral test databases)
+
+**PostgreSQL 16** (server + client) is installed for tests that need a real
+Postgres. It is **not** a persistent service — the `pg-tmp` helper spins up a
+throwaway cluster in a `mktemp` data dir with `trust` auth, listening only on a
+unix socket in `/tmp`, and everything vanishes when the container exits. It runs
+as `ubuntu` (postgres refuses to run as root anyway; there is no `sudo` here).
+
+```sh
+eval "$(pg-tmp)"               # inits + starts a cluster, exports PGHOST etc.
+createdb testdb
+psql -c 'select version();'
+```
+
+`pg-tmp` prints the `export`s to stdout and all progress to stderr, so it's safe
+to `eval`. For pg-specific behaviour this is the way; if a suite can run on
+SQLite instead, `php8.3-sqlite3` is already installed and needs no setup.
+
+## Build toolchain
+
+`build-essential` (gcc/g++/make/libc headers) and `libpq-dev` are installed so
+packages without a usable wheel can be compiled in place — most often
+`psycopg2`, which needs `pg_config` and the libpq headers from `libpq-dev`.
+Since there is no `sudo` in the box, anything else a source build needs has to
+be added to the `Containerfile` and `claude-box --rebuild`ed; that includes
+`python3.12-dev` if a project builds a CPython C extension needing `Python.h`.
+
 ## Browser tests (Chrome)
 
 Google Chrome (matching the host version) is installed for browser-based tests
@@ -70,8 +110,9 @@ npm test -- --watch=false      # or: ng test --watch=false
 
 ## Files
 
-- `Containerfile` — image definition (Ubuntu 24.04 + Python 3.12 + Node 22 + PHP 8.3 + Claude Code).
+- `Containerfile` — image definition (Ubuntu 24.04 + Python 3.12 / 2.7 + Node 22 + PHP 8.3 + PostgreSQL 16 + Claude Code).
 - `box-entry` — container entrypoint (runs `claude` by default; `bash`/`shell` for a shell).
+- `pg-tmp` — spins up a throwaway PostgreSQL for tests (`eval "$(pg-tmp)"`).
 - `claude-box` — host launcher (symlinked into `~/.local/bin`).
 
 ## Notes
@@ -81,5 +122,9 @@ npm test -- --watch=false      # or: ng test --watch=false
   rather than your SSH key.
 - Your Claude login persists across runs because `~/.claude.json` is mounted
   read-write.
+- The image sets `CLAUDE_BOX=1` as a cheap marker so Claude can tell it's in the
+  sandbox (test `$CLAUDE_BOX`, no process spawned) — used by the global
+  `~/.claude/CLAUDE.md` note to know that `pg-tmp` and the pre-baked toolchain
+  are available and that `apt-get` isn't.
 - The host `docker` group (daemon-based, root-equivalent) is unrelated to this
   setup and unused; everything here goes through rootless Podman.

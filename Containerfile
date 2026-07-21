@@ -58,6 +58,59 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         composer \
     && rm -rf /var/lib/apt/lists/*
 
+# PostgreSQL 16 server for ephemeral test databases. Not a persistent service:
+# the `pg-tmp` helper inits a throwaway cluster in a mktemp dir with `trust`
+# auth, listening only on a unix socket in /tmp, and it vanishes with the
+# container. Ubuntu 24.04 ships PostgreSQL 16; its server binaries live under
+# /usr/lib/postgresql/16/bin (not on PATH), which pg-tmp calls directly. Runs
+# as `ubuntu` — postgres refuses to run as root anyway, and initdb/pg_ctl are
+# happy as an ordinary user against a data dir it owns. php8.3-pgsql (above)
+# and postgresql-client cover the client side.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        postgresql postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+COPY pg-tmp /usr/local/bin/pg-tmp
+RUN chmod +x /usr/local/bin/pg-tmp
+
+# C toolchain + headers for building native extensions from source — pip/uv fall
+# back to compiling when a project pins a version with no manylinux wheel (e.g.
+# psycopg2, which needs libpq-dev's pg_config and libpq headers). Kept as its own
+# layer, after the language runtimes, so adding to it doesn't invalidate them.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python 2.7 — noble dropped python2 from its own repos, so pull jammy's .debs
+# (python2.7 2.7.18-13ubuntu1.5). Jammy and noble both ship libssl3/openssl 3.0
+# and jammy's build is patched for it, so ssl/hashlib work (a from-source 2.7.18
+# would not, since upstream 2.7 predates openssl 3.0). Noble's time_t64 transition
+# renamed only libdb5.3 -> libdb5.3t64 among the deps we need; it still provides
+# libdb-5.3.so, so we install it first and --force-depends past the one jammy
+# Depends line that still names the pre-t64 package. `apt-get download` (not a
+# full jammy pin) resolves the current jammy version and grabs *only* these four
+# packages, so nothing else leaks in from jammy. python2 -> python2.7 and pip2
+# (last py2 pip via get-pip) are added so legacy scripts run unchanged.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        libdb5.3t64 libncursesw6 libtinfo6 \
+        libbz2-1.0 libffi8 libexpat1 libnsl2 libtirpc3 \
+        libreadline8 libsqlite3-0 libssl3 libcrypt1 media-types; \
+    echo 'deb http://archive.ubuntu.com/ubuntu jammy main universe' \
+        > /etc/apt/sources.list.d/jammy-py2.list; \
+    apt-get update; \
+    ( cd /tmp && apt-get download \
+        libpython2.7-minimal python2.7-minimal libpython2.7-stdlib python2.7 ); \
+    rm /etc/apt/sources.list.d/jammy-py2.list; \
+    dpkg -i --force-depends \
+        /tmp/libpython2.7-minimal_*.deb /tmp/python2.7-minimal_*.deb \
+        /tmp/libpython2.7-stdlib_*.deb /tmp/python2.7_*.deb; \
+    ln -sf /usr/bin/python2.7 /usr/local/bin/python2; \
+    curl -fsSL https://bootstrap.pypa.io/pip/2.7/get-pip.py -o /tmp/get-pip.py; \
+    python2 /tmp/get-pip.py; \
+    rm -f /tmp/*.deb /tmp/get-pip.py; \
+    rm -rf /var/lib/apt/lists/*
+
 # Claude Code itself. Also expose it at $HOME/.local/bin/claude — the location
 # Claude's install-health check expects — and disable the auto-updater, which
 # would otherwise warn and try to "repair"/update a global install it can't
@@ -72,7 +125,11 @@ RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
 # Keep uv's cache under ~/git (the same absolute path on host and in the box).
 # Because ~/git is a single bind-mount, the cache and any project's .venv share
 # one filesystem, so uv can hardlink wheels into venvs (fast) instead of copying.
+# CLAUDE_BOX marks the environment as this sandbox, so Claude can cheaply tell
+# it's running in the box (test for $CLAUDE_BOX) without shelling out — e.g. to
+# decide whether pg-tmp / the pre-baked toolchain are available.
 ENV DISABLE_AUTOUPDATER=1 \
+    CLAUDE_BOX=1 \
     UV_CACHE_DIR=/zdrive/work/home/jon/git/.cache/uv \
     CHROME_BIN=/usr/local/bin/chrome-headless \
     PATH="/home/ubuntu/.local/bin:${PATH}"

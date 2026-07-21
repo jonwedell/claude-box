@@ -1,0 +1,30 @@
+#!/bin/sh
+# pg-tmp — spin up a throwaway PostgreSQL for testing inside claude-box.
+#
+# Ephemeral by design: the data dir is a mktemp that disappears when the
+# container exits (nothing persists across runs). Auth is `trust` and the
+# server listens only on a unix socket in /tmp, so no passwords and no TCP
+# port to collide with. Prints shell `export`s to stdout; everything else
+# goes to stderr so the output is safe to eval:
+#
+#     eval "$(pg-tmp)"
+#     createdb testdb
+#     psql -c 'select version();'
+#
+# postgres refuses to run as root, but claude-box runs as `ubuntu`, so
+# initdb/pg_ctl work fine against a data dir this user owns.
+set -e
+
+PGBIN=$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1)
+if [ -z "$PGBIN" ]; then
+    echo "pg-tmp: no PostgreSQL server found under /usr/lib/postgresql" >&2
+    exit 1
+fi
+
+PGDATA=$(mktemp -d)
+"$PGBIN/initdb" -U postgres -A trust "$PGDATA" >&2
+"$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/server.log" \
+    -o "-k /tmp -p 5432 -c listen_addresses=''" -w start >&2
+
+echo "pg-tmp: ready — socket in /tmp, data dir $PGDATA (removed on exit)" >&2
+echo "export PGHOST=/tmp PGPORT=5432 PGUSER=postgres PGDATABASE=postgres"
