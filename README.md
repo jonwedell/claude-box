@@ -88,12 +88,12 @@ SQLite instead, `php8.3-sqlite3` is already installed and needs no setup.
 
 ## Build toolchain
 
-`build-essential` (gcc/g++/make/libc headers) and `libpq-dev` are installed so
-packages without a usable wheel can be compiled in place — most often
-`psycopg2`, which needs `pg_config` and the libpq headers from `libpq-dev`.
-Since there is no `sudo` in the box, anything else a source build needs has to
-be added to the `Containerfile` and `claude-box --rebuild`ed; that includes
-`python3.12-dev` if a project builds a CPython C extension needing `Python.h`.
+`build-essential` (gcc/g++/make/libc headers), `libpq-dev`, and `python3.12-dev`
+are installed so packages without a usable wheel can be compiled in place — most
+often `psycopg2`, which needs `pg_config` and the libpq headers from `libpq-dev`
+plus `Python.h` from `python3.12-dev`. Since there is no `sudo` in the box,
+anything else a source build needs has to be added to the `Containerfile`
+followed by a `claude-box --rebuild`.
 
 ## Browser tests (Chrome)
 

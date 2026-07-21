@@ -74,10 +74,11 @@ RUN chmod +x /usr/local/bin/pg-tmp
 
 # C toolchain + headers for building native extensions from source — pip/uv fall
 # back to compiling when a project pins a version with no manylinux wheel (e.g.
-# psycopg2, which needs libpq-dev's pg_config and libpq headers). Kept as its own
-# layer, after the language runtimes, so adding to it doesn't invalidate them.
+# psycopg2, which needs libpq-dev's pg_config and libpq headers, plus Python.h
+# from python3.12-dev). Kept as its own layer, after the language runtimes, so
+# adding to it doesn't invalidate them.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential libpq-dev \
+        build-essential libpq-dev python3.12-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Python 2.7 — noble dropped python2 from its own repos, so pull jammy's .debs
