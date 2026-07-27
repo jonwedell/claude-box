@@ -8,7 +8,7 @@ credentials or host root.
 
 | Concern | How it's handled |
 | --- | --- |
-| Home-dir secrets (`~/.ssh`, `~/.aws`, `~/.config/gh`, browser data, …) | Not mounted into the container, so they don't exist inside it. Only `~/git` plus Claude's own config (`~/.claude`, `~/.claude.json`, `~/.gitconfig`) are mounted. |
+| Home-dir secrets (`~/.ssh`, `~/.aws`, `~/.config/gh`, browser data, …) | Not mounted into the container, so they don't exist inside it. Only `~/git`, Claude's own config (`~/.claude`, `~/.claude.json`, `~/.gitconfig`) and two project config files (`~/mailpad.properties`, `~/validator.properties` — see [Home-level config](#home-level-config)) are mounted. |
 | Passwordless `sudo` / host root | Rootless Podman + a non-root container user (`ubuntu`, UID 1000). There is no `sudo` binary in the image, and even container-root maps to your unprivileged user on the host. |
 | File ownership | `--userns=keep-id` maps your host UID 1000 onto the container's UID 1000, so files Claude writes under `~/git` are owned by **you** on the host. Your IDE sees live diffs and edits them with no friction. |
 | Network | Unrestricted (exfiltration isn't a concern for these mostly-public repos). |
@@ -24,6 +24,33 @@ claude-box --rebuild       # rebuild the image after editing the Containerfile
 ```
 
 `claude-box` refuses to run outside `~/git` so nothing else is ever exposed.
+
+## Updating Claude Code
+
+The image bakes in a specific Claude Code version, so launches are fast and
+reproducible — Claude's own auto-updater is disabled (it can't write the
+root-owned global install from inside the non-root container anyway). To move to
+the newest release, just rebuild:
+
+```sh
+claude-box --rebuild
+```
+
+`--rebuild` asks npm for the current version and passes it as a `CLAUDE_VERSION`
+build arg. Because that value changes when a new release exists, only the Claude
+layer (near the end of the build) is invalidated — the rebuild is quick, not a
+from-scratch image build. A plain `podman build` (no launcher) defaults the arg
+to `@latest`.
+
+On every launch the launcher does a throttled (once/24h) check against npm and,
+if the box is behind, prints a one-line nudge:
+
+```
+claude-box: Claude Code 2.1.221 available (box has 2.1.220). Run `claude-box --rebuild` to update.
+```
+
+The check is best-effort: it's skipped silently when npm is unavailable or
+you're offline, and never blocks or fails the launch.
 
 ## Python / venvs
 
@@ -74,6 +101,37 @@ along with `composer` for dependency management. If a project needs an extension
 that isn't bundled, add the matching `php8.3-*` package to the `Containerfile`
 and `claude-box --rebuild`.
 
+## Java
+
+**OpenJDK 21** and **Ant 1.10** are installed from Ubuntu 24.04's own repos — the
+same packages, and the same version, the host runs. So `java`/`javac` are at
+`/usr/bin` and the JDK at `/usr/lib/jvm/java-21-openjdk-amd64` inside the box
+exactly as outside, and anything hardcoding those paths (or `JAVA_HOME`, which is
+unset on both) works unchanged — the same logic as `python3.12` and `php`. Sharing
+the host's `/usr/lib/jvm` by bind-mount would have been the other option, but that
+breaks the isolation model, so it's installed instead.
+
+This is a full **build** environment, not just a runtime: the package split
+mirrors the host, with `openjdk-21-jdk-headless` supplying `javac`/`jar` and the
+full `openjdk-21-jre` adding the AWT/Swing native libraries that the Swing apps
+under `dictionary/validator` (mailpad, jedit) link against.
+
+Every Java project here builds with a `build.xml` rather than maven or gradle, so
+`ant` is installed and neither of those is. The builds use only core Ant tasks
+plus a local `macrodef`, so `ant-contrib` and `ant-optional` — present on the host
+but unused by them — are deliberately left out; add them to the `Containerfile`
+and `claude-box --rebuild` if a build ever needs them.
+
+## Home-level config
+
+Some of the `dictionary/validator` Java tools read their configuration from
+`$HOME` instead of from the repo, so `~/mailpad.properties` and
+`~/validator.properties` are mounted into the container home. On the host both
+are symlinks into `~/git/dictionary/validator`; Podman resolves them at mount
+time, so the box sees the very same file it already sees through the `~/git`
+mount — which is why they're mounted read-write rather than read-only. If either
+is missing on the host, the launcher just skips it.
+
 ## PostgreSQL (ephemeral test databases)
 
 **PostgreSQL 16** (server + client) is installed for tests that need a real
@@ -117,7 +175,7 @@ npm test -- --watch=false      # or: ng test --watch=false
 
 ## Files
 
-- `Containerfile` — image definition (Ubuntu 24.04 + Python 3.12 / 2.7 + Node 22 + PHP 8.3 + PostgreSQL 16 + Claude Code).
+- `Containerfile` — image definition (Ubuntu 24.04 + Python 3.12 / 2.7 + Node 22 + PHP 8.3 + OpenJDK 21 / Ant + PostgreSQL 16 + Claude Code).
 - `box-entry` — container entrypoint (runs `claude` by default; `bash`/`shell` for a shell).
 - `pg-tmp` — spins up a throwaway PostgreSQL for tests (`eval "$(pg-tmp)"`).
 - `claude-box` — host launcher (symlinked into `~/.local/bin`).

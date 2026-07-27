@@ -125,14 +125,38 @@ RUN set -eux; \
     rm -f /tmp/*.deb /tmp/get-pip.py; \
     rm -rf /var/lib/apt/lists/*
 
-# Claude Code itself. Also expose it at $HOME/.local/bin/claude — the location
-# Claude's install-health check expects — and disable the auto-updater, which
-# would otherwise warn and try to "repair"/update a global install it can't
-# write to from inside the container.
+# OpenJDK 21 + Ant — mirrors the host, which runs noble's own openjdk-21 packages.
+# Same repo, same version, so java/javac land at /usr/bin and the JDK at
+# /usr/lib/jvm/java-21-openjdk-amd64 exactly as on the host; anything hardcoding
+# either path (or JAVA_HOME) works unchanged. Bind-mounting the host's /usr/lib/jvm
+# would break the isolation model, so it's installed rather than shared.
+# The package split matches the host: -jdk-headless carries javac/jar (so this is a
+# build environment, not just a runtime) and the full -jre adds the AWT/Swing native
+# libs the Swing apps under dictionary/validator (mailpad, jedit) link against.
+# ant because every Java project here builds with build.xml, not maven/gradle; their
+# builds use only core tasks plus a local macrodef, so ant-contrib/ant-optional
+# (present on the host but unused) are deliberately left out.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-21-jdk-headless openjdk-21-jre ant \
+    && rm -rf /var/lib/apt/lists/*
+
+# Claude Code itself. The version comes from a build ARG (default `latest`), so a
+# plain `podman build` installs the newest release. `claude-box --rebuild`
+# resolves npm's current version and passes it as --build-arg CLAUDE_VERSION=...;
+# a concrete value there busts this layer's cache whenever a new release exists,
+# so --rebuild reliably updates. A bare `@latest` RUN line would instead stay
+# cached forever (--rebuild is a plain `podman build`, not --no-cache) and never
+# move. The launcher separately checks npm on startup and nudges toward
+# --rebuild when the running box is behind.
+# Also expose claude at $HOME/.local/bin/claude — the location Claude's
+# install-health check expects — and disable the auto-updater, which would
+# otherwise warn and try to "repair"/update a global install it can't write to
+# from inside the container.
 # Pre-create ~/.local/{bin,share/applications} owned by `ubuntu` so they stay
 # writable after the ~/.local/share/uv bind-mount (which otherwise leaves the
 # parent root-owned) — Chrome's first-run writes to share/applications.
-RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
+ARG CLAUDE_VERSION=latest
+RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_VERSION} && npm cache clean --force \
     && mkdir -p /home/ubuntu/.local/bin /home/ubuntu/.local/share/applications \
     && ln -sf "$(command -v claude)" /home/ubuntu/.local/bin/claude \
     && chown -R ubuntu:ubuntu /home/ubuntu/.local

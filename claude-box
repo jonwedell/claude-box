@@ -21,14 +21,55 @@ HOMEDIR="/home/ubuntu"   # in-container home (Ubuntu 24.04 'ubuntu' user, UID 10
 # symlinked into ~/.local/bin) — otherwise --rebuild can't find the Containerfile.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
+# Resolve npm's current Claude Code version into a --build-arg. Passing a concrete
+# version (rather than letting the Containerfile default to @latest) is what busts
+# the Claude layer's build cache when a new release exists, so --rebuild actually
+# updates instead of reusing the cached install. Empty (npm missing/offline) => no
+# arg => Containerfile default (@latest) still applies.
+claude_build_arg() {
+  command -v npm >/dev/null 2>&1 || return 0
+  local ver
+  ver="$(timeout 10 npm view @anthropic-ai/claude-code version 2>/dev/null || true)"
+  [ -n "$ver" ] && printf -- '--build-arg\nCLAUDE_VERSION=%s\n' "$ver"
+}
+
 # Build on demand: explicit --rebuild, or automatically on first run.
 if [ "${1:-}" = "--rebuild" ]; then
   shift
-  podman build -t "$IMAGE" "$SCRIPT_DIR"
+  mapfile -t _ba < <(claude_build_arg)
+  podman build "${_ba[@]}" -t "$IMAGE" "$SCRIPT_DIR"
 elif ! podman image exists "$IMAGE"; then
   echo "claude-box: building image (first run, this takes a minute)..." >&2
-  podman build -t "$IMAGE" "$SCRIPT_DIR"
+  mapfile -t _ba < <(claude_build_arg)
+  podman build "${_ba[@]}" -t "$IMAGE" "$SCRIPT_DIR"
 fi
+
+# Startup update nudge (throttled to once/24h): if npm has a newer Claude Code
+# than the one baked into the image, print a one-line hint to --rebuild. Never
+# blocks or fails the launch — silently skipped when offline or npm is absent,
+# and the throttle stamp is only written after a successful npm lookup so an
+# offline launch retries next time rather than going quiet for a day.
+update_nudge() {
+  command -v npm >/dev/null 2>&1 || return 0
+  local stamp="${XDG_CACHE_HOME:-$HOME/.cache}/claude-box/last-update-check"
+  mkdir -p "$(dirname "$stamp")" 2>/dev/null || return 0
+  [ -n "$(find "$stamp" -mmin -1440 2>/dev/null)" ] && return 0
+  local latest installed older
+  latest="$(timeout 3 npm view @anthropic-ai/claude-code version 2>/dev/null || true)"
+  [ -n "$latest" ] || return 0
+  touch "$stamp"
+  installed="$(podman run --rm --entrypoint claude "$IMAGE" --version 2>/dev/null \
+                | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+  [ -n "$installed" ] || return 0
+  # Only nudge when installed is strictly older than latest (sort -V picks the
+  # smaller version; if it's the installed one, we're behind).
+  older="$(printf '%s\n%s\n' "$installed" "$latest" | sort -V | head -n1)"
+  if [ "$installed" != "$latest" ] && [ "$older" = "$installed" ]; then
+    printf '\033[33mclaude-box: Claude Code %s available (box has %s). Run `claude-box --rebuild` to update.\033[0m\n' \
+      "$latest" "$installed" >&2
+  fi
+}
+update_nudge
 
 # Refuse to run from outside ~/git so we never accidentally expose other paths.
 case "$PWD" in
@@ -41,6 +82,17 @@ mounts=( -v "$GIT_DIR:$GIT_DIR" )
 [ -e "$HOME/.claude" ]      && mounts+=( -v "$HOME/.claude:$HOMEDIR/.claude" )
 [ -e "$HOME/.claude.json" ] && mounts+=( -v "$HOME/.claude.json:$HOMEDIR/.claude.json" )
 [ -e "$HOME/.gitconfig" ]   && mounts+=( -v "$HOME/.gitconfig:$HOMEDIR/.gitconfig:ro" )
+
+# Config that dictionary/validator's Java tools read from $HOME rather than from
+# the repo. On the host these are symlinks into ~/git/dictionary/validator, which
+# podman resolves at mount time, so the box sees the very same file it already
+# sees through the ~/git mount — mounted rw for that reason, since it's writable
+# there anyway. Skipped silently if absent.
+for prop in mailpad.properties validator.properties; do
+  if [ -e "$HOME/$prop" ]; then
+    mounts+=( -v "$HOME/$prop:$HOMEDIR/$prop" )
+  fi
+done
 
 # Share uv's managed Pythons so uv-managed projects reuse them. uv's package
 # cache lives under ~/git (already mounted) at ~/git/.cache/uv — see
