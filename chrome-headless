@@ -7,6 +7,16 @@
 #   --headless=new          no display in the container.
 #   --disable-gpu           no GPU in the container.
 #   --disable-dev-shm-usage default /dev/shm is tiny here and crashes Chrome.
+#
+# Chrome is only installed on amd64 images (Google publishes no Linux arm64
+# build), so fail loudly rather than with a bare "not found" on other arches.
+if [ ! -x /usr/bin/google-chrome-stable ]; then
+  echo "chrome-headless: Google Chrome is not installed in this image." >&2
+  echo "  It is amd64-only; this box is $(dpkg --print-architecture). Browser" >&2
+  echo "  tests need to run on the host (or an amd64 box) — see README.md." >&2
+  exit 127
+fi
+
 exec /usr/bin/google-chrome-stable \
   --no-sandbox \
   --headless=new \

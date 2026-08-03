@@ -36,13 +36,25 @@ COPY --from=ghcr.io/astral-sh/uv:0.7.19 /uv /uvx /usr/local/bin/
 # repo pulls in all the runtime libs Chrome needs; fonts-liberation covers
 # rendering. The chrome-headless shim (CHROME_BIN below) adds the flags a
 # containerized Chrome requires, so karma.conf's `browsers: ['Chrome']` works.
-RUN curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
-        | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
-    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
-        > /etc/apt/sources.list.d/google-chrome.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends google-chrome-stable fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
+#
+# amd64 only: Google publishes no Linux arm64 Chrome build, and noble's
+# `chromium-browser` is just a snap-transitional stub (snapd can't run here), so
+# on an Apple-Silicon host the whole layer is skipped rather than failing the
+# build. Everything else in the image is arch-independent; the shim prints a
+# clear error if something tries to launch Chrome there. See README.
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    if [ "$arch" != "amd64" ]; then \
+        echo "claude-box: skipping Google Chrome — no Linux $arch build is published"; \
+    else \
+        curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+            | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg; \
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+            > /etc/apt/sources.list.d/google-chrome.list; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends google-chrome-stable fonts-liberation; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi
 COPY chrome-headless /usr/local/bin/chrome-headless
 RUN chmod +x /usr/local/bin/chrome-headless
 
@@ -100,15 +112,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # is listed alongside jammy so every one of them resolves to the patched
 # 2.7.18-13ubuntu1.5 (plain `jammy` alone still offers 13ubuntu1). libexpat1-dev
 # is noble's and satisfies the one build-dep the py2 headers name.
+#
+# Mirror depends on the arch: archive/security.ubuntu.com carry only amd64/i386,
+# every other port (arm64 on Apple Silicon) lives on ports.ubuntu.com. Jammy
+# built all seven of these for arm64 too, so py2 works on both.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         libdb5.3t64 libncursesw6 libtinfo6 \
         libbz2-1.0 libffi8 libexpat1 libexpat1-dev libnsl2 libtirpc3 \
         libreadline8 libsqlite3-0 libssl3 libcrypt1 media-types; \
-    { echo 'deb http://archive.ubuntu.com/ubuntu jammy main universe'; \
-      echo 'deb http://security.ubuntu.com/ubuntu jammy-security main universe'; \
-    } > /etc/apt/sources.list.d/jammy-py2.list; \
+    if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        { echo 'deb http://archive.ubuntu.com/ubuntu jammy main universe'; \
+          echo 'deb http://security.ubuntu.com/ubuntu jammy-security main universe'; \
+        } > /etc/apt/sources.list.d/jammy-py2.list; \
+    else \
+        { echo 'deb http://ports.ubuntu.com/ubuntu-ports jammy main universe'; \
+          echo 'deb http://ports.ubuntu.com/ubuntu-ports jammy-security main universe'; \
+        } > /etc/apt/sources.list.d/jammy-py2.list; \
+    fi; \
     apt-get update; \
     ( cd /tmp && apt-get download \
         libpython2.7-minimal python2.7-minimal libpython2.7-stdlib python2.7 \
@@ -139,12 +161,17 @@ RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
 # Keep uv's cache under ~/git (the same absolute path on host and in the box).
 # Because ~/git is a single bind-mount, the cache and any project's .venv share
 # one filesystem, so uv can hardlink wheels into venvs (fast) instead of copying.
+# That path is the *host's* ~/git, which differs per machine (/zdrive/work/home/
+# jon/git on the Linux box, /Users/jon/git on a Mac), so the launcher passes it
+# in with --build-arg HOST_GIT_DIR="$GIT_DIR"; the default just keeps a bare
+# `podman build .` working.
 # CLAUDE_BOX marks the environment as this sandbox, so Claude can cheaply tell
 # it's running in the box (test for $CLAUDE_BOX) without shelling out — e.g. to
 # decide whether pg-tmp / the pre-baked toolchain are available.
+ARG HOST_GIT_DIR=/zdrive/work/home/jon/git
 ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_BOX=1 \
-    UV_CACHE_DIR=/zdrive/work/home/jon/git/.cache/uv \
+    UV_CACHE_DIR=${HOST_GIT_DIR}/.cache/uv \
     CHROME_BIN=/usr/local/bin/chrome-headless \
     PATH="/home/ubuntu/.local/bin:${PATH}"
 

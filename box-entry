@@ -5,6 +5,17 @@
 # as the first arg to drop into a shell instead, e.g. for poking around or
 # running a one-off command: `claude-box bash -c 'python3.12 --version'`.
 set -e
+
+# The launcher passes the host cwd here instead of using `podman run -w`, which
+# on macOS leaves that one directory stat-ing as root inside the box and makes
+# git refuse the repo ("dubious ownership"). See the comment in `claude-box`.
+if [ -n "${CLAUDE_BOX_CWD:-}" ]; then
+  cd "$CLAUDE_BOX_CWD" || {
+    echo "box-entry: cannot cd to $CLAUDE_BOX_CWD — is it under the mounted ~/git?" >&2
+    exit 1
+  }
+fi
+
 case "${1:-}" in
   bash | shell | sh)
     shift
