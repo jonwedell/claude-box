@@ -8,7 +8,7 @@ credentials or host root.
 
 | Concern | How it's handled |
 | --- | --- |
-| Home-dir secrets (`~/.ssh`, `~/.aws`, `~/.config/gh`, browser data, …) | Not mounted into the container, so they don't exist inside it. Only `~/git`, Claude's own config (`~/.claude`, `~/.claude.json`, `~/.gitconfig`) and two project config files (`~/mailpad.properties`, `~/validator.properties` — see [Home-level config](#home-level-config)) are mounted. |
+| Home-dir secrets (`~/.ssh`, `~/.aws`, `~/.config/gh`, browser data, …) | Not mounted into the container, so they don't exist inside it. Only `~/git`, Claude's own config (`~/.claude`, `~/.claude.json`, `~/.gitconfig`), two project config files (`~/mailpad.properties`, `~/validator.properties` — see [Home-level config](#home-level-config)) and, when it's mounted on the host, the BMRB share (`~/mnt/BMRB` → `/projects/BMRB`, read-only) are mounted. |
 | Passwordless `sudo` / host root | Rootless Podman + a non-root container user (`ubuntu`, UID 1000). There is no `sudo` binary in the image, and even container-root maps to your unprivileged user on the host. |
 | File ownership | `--userns=keep-id` maps your host UID 1000 onto the container's UID 1000, so files Claude writes under `~/git` are owned by **you** on the host. Your IDE sees live diffs and edits them with no friction. |
 | Network | Unrestricted (exfiltration isn't a concern for these mostly-public repos). |
@@ -175,7 +175,7 @@ npm test -- --watch=false      # or: ng test --watch=false
 
 ## Files
 
-- `Containerfile` — image definition (Ubuntu 24.04 + Python 3.12 / 2.7 + Node 22 + PHP 8.3 + OpenJDK 21 / Ant + PostgreSQL 16 + Claude Code).
+- `Containerfile` — image definition (Ubuntu 24.04 + Python 3.12 / 2.7 + Node 22 + PHP 8.3 + OpenJDK 21 / Ant + PostgreSQL 16 + git / CVS + Claude Code).
 - `box-entry` — container entrypoint (runs `claude` by default; `bash`/`shell` for a shell).
 - `pg-tmp` — spins up a throwaway PostgreSQL for tests (`eval "$(pg-tmp)"`).
 - `claude-box` — host launcher (symlinked into `~/.local/bin`).

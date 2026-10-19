@@ -14,7 +14,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 # python3.12 + venv/pip   - matches host interpreter path for venv compatibility
-# git                     - repo operations
+# git / cvs               - repo operations
 # ripgrep                 - Claude's search tooling
 # less / procps           - pager + process tools Claude shells out to
 # ca-certificates/curl/gnupg - TLS + NodeSource setup
@@ -22,7 +22,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg \
         python3.12 python3.12-venv python3-pip \
-        git ripgrep less procps \
+        git cvs ripgrep less procps \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*

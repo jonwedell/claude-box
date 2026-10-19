@@ -99,6 +99,10 @@ done
 # UV_CACHE_DIR in the Containerfile — so hardlinks into venvs work.
 [ -e "$HOME/.local/share/uv" ] && mounts+=( -v "$HOME/.local/share/uv:$HOMEDIR/.local/share/uv" )
 
+# The BMRB share, read-only, if it's currently mounted on the host. `mountpoint`
+# (not just -e) so an unmounted, empty ~/mnt/BMRB isn't passed through.
+mountpoint -q "$HOME/mnt/BMRB" && mounts+=( -v "$HOME/mnt/BMRB:/projects/BMRB:ro" )
+
 envs=( -e "TERM=${TERM:-xterm-256color}" )
 [ -n "${ANTHROPIC_API_KEY:-}" ] && envs+=( -e ANTHROPIC_API_KEY )
 
