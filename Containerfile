@@ -140,6 +140,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         openjdk-21-jdk-headless openjdk-21-jre ant \
     && rm -rf /var/lib/apt/lists/*
 
+# Rust — rustup-managed toolchain, pinned to the host's current stable. Bump
+# RUST_VERSION and `claude-box --rebuild` when the host's rustup moves; a concrete
+# version here means the box and host agree on rustc rather than drifting apart
+# silently, the same reasoning as the pinned uv.
+# RUSTUP_HOME/CARGO_HOME deliberately use the *host's* paths (~jon/.cargo,
+# ~jon/.rustup) instead of the container home: only ~/git is bind-mounted out of
+# that home, so these stay the image's own directories, and matching the paths
+# means the crate sources cargo records in build artifacts (and the registry cache
+# the launcher mounts in) line up with the host's — the same host-path-mirroring
+# logic as python3.12/php/java. Everything cargo needs to write at runtime lives
+# under those two dirs, hence the chown to `ubuntu`.
+# --profile minimal plus clippy/rustfmt mirrors what the host actually uses to
+# build; it drops rust-docs (~150MB of HTML nothing in here reads), the same way
+# ant-contrib is left out of the Java layer. pkg-config comes along because most
+# -sys crates shell out to it to find native libs; the libs themselves have to be
+# added here when a crate needs one, since there is no sudo in the box.
+ARG RUST_VERSION=1.93.0
+ENV RUSTUP_HOME=/zdrive/work/home/jon/.rustup \
+    CARGO_HOME=/zdrive/work/home/jon/.cargo
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --no-modify-path --profile minimal \
+        --default-toolchain "${RUST_VERSION}" -c clippy -c rustfmt \
+    && rm /tmp/rustup-init.sh \
+    && chown -R ubuntu:ubuntu "$RUSTUP_HOME" "$CARGO_HOME"
+
 # Claude Code itself. The version comes from a build ARG (default `latest`), so a
 # plain `podman build` installs the newest release. `claude-box --rebuild`
 # resolves npm's current version and passes it as --build-arg CLAUDE_VERSION=...;
@@ -170,7 +197,7 @@ ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_BOX=1 \
     UV_CACHE_DIR=/zdrive/work/home/jon/git/.cache/uv \
     CHROME_BIN=/usr/local/bin/chrome-headless \
-    PATH="/home/ubuntu/.local/bin:${PATH}"
+    PATH="/home/ubuntu/.local/bin:/zdrive/work/home/jon/.cargo/bin:${PATH}"
 
 COPY box-entry /usr/local/bin/box-entry
 RUN chmod +x /usr/local/bin/box-entry

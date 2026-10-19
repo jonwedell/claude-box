@@ -8,7 +8,7 @@ credentials or host root.
 
 | Concern | How it's handled |
 | --- | --- |
-| Home-dir secrets (`~/.ssh`, `~/.aws`, `~/.config/gh`, browser data, …) | Not mounted into the container, so they don't exist inside it. Only `~/git`, Claude's own config (`~/.claude`, `~/.claude.json`, `~/.gitconfig`), two project config files (`~/mailpad.properties`, `~/validator.properties` — see [Home-level config](#home-level-config)) and, when it's mounted on the host, the BMRB share (`~/mnt/BMRB` → `/projects/BMRB`, read-only) are mounted. |
+| Home-dir secrets (`~/.ssh`, `~/.aws`, `~/.config/gh`, browser data, …) | Not mounted into the container, so they don't exist inside it. Only `~/git`, Claude's own config (`~/.claude`, `~/.claude.json`, `~/.gitconfig`), two project config files (`~/mailpad.properties`, `~/validator.properties` — see [Home-level config](#home-level-config)), two build caches (`~/.local/share/uv`, the cache subdirs of `~/.cargo` — see [Rust](#rust)) and, when it's mounted on the host, the BMRB share (`~/mnt/BMRB` → `/projects/BMRB`, read-only) are mounted. |
 | Passwordless `sudo` / host root | Rootless Podman + a non-root container user (`ubuntu`, UID 1000). There is no `sudo` binary in the image, and even container-root maps to your unprivileged user on the host. |
 | File ownership | `--userns=keep-id` maps your host UID 1000 onto the container's UID 1000, so files Claude writes under `~/git` are owned by **you** on the host. Your IDE sees live diffs and edits them with no friction. |
 | Network | Unrestricted (exfiltration isn't a concern for these mostly-public repos). |
@@ -122,6 +122,39 @@ plus a local `macrodef`, so `ant-contrib` and `ant-optional` — present on the 
 but unused by them — are deliberately left out; add them to the `Containerfile`
 and `claude-box --rebuild` if a build ever needs them.
 
+## Rust
+
+A **rustup-managed stable toolchain** (pinned to the host's — currently 1.93.0)
+is installed for the Rust projects under `~/git` (`lucky-commit`, PyNMRSTAR's
+pyo3 parser). `rustc`, `cargo`, `clippy` and `rustfmt` are on `PATH`; the `cc`
+linker comes from `build-essential` and `pkg-config` is installed for `-sys`
+crates that probe for native libs. When the host's `rustup update` moves stable,
+bump `RUST_VERSION` in the `Containerfile` and `claude-box --rebuild`, so box and
+host don't drift apart silently.
+
+`RUSTUP_HOME`/`CARGO_HOME` point at the **host's** paths
+(`~/.rustup`, `~/.cargo`) rather than the container home. Only `~/git` is
+bind-mounted out of that home, so those stay the image's own directories — this
+is the same host-path mirroring as `python3.12`/`php`/`java`, and here it buys
+warm builds: cargo's fingerprints hash the absolute paths of `rustc` and of the
+crate sources under `~/.cargo/registry`, so with the paths (and the pinned rustc)
+matching, a `target/` dir built on the host comes up `Fresh` in the box and vice
+versa, instead of triggering a full rebuild on every switch.
+
+The launcher mounts the *cache* parts of the host's `~/.cargo` — `registry/`,
+`git/` and the `.package-cache*` lock files — into that same path, so the box
+reuses crates you've already downloaded instead of re-fetching crates.io on
+every run (the container filesystem is `--rm`). `~/.cargo/bin` is deliberately
+**not** mounted: it must stay the image's own rustup shims, and a `cargo login`
+token lives at the top level of `~/.cargo` too. Sharing the lock files means a
+host `cargo` and a box `cargo` can't mutate the cache simultaneously.
+
+`rustup` itself works in the box, but `~/.rustup` is inside the image, so an
+added component or target is gone at exit — put anything permanent in the
+`Containerfile`. That is also why `RUST_VERSION` wants to track the host: once
+the two rustcs differ, the shared `target/` dirs stop being `Fresh` for each
+other and every switch pays a rebuild.
+
 ## Home-level config
 
 Some of the `dictionary/validator` Java tools read their configuration from
@@ -175,7 +208,7 @@ npm test -- --watch=false      # or: ng test --watch=false
 
 ## Files
 
-- `Containerfile` — image definition (Ubuntu 24.04 + Python 3.12 / 2.7 + Node 22 + PHP 8.3 + OpenJDK 21 / Ant + PostgreSQL 16 + git / CVS + Claude Code).
+- `Containerfile` — image definition (Ubuntu 24.04 + Python 3.12 / 2.7 + Node 22 + PHP 8.3 + OpenJDK 21 / Ant + Rust 1.93 + PostgreSQL 16 + git / CVS + Claude Code).
 - `box-entry` — container entrypoint (runs `claude` by default; `bash`/`shell` for a shell).
 - `pg-tmp` — spins up a throwaway PostgreSQL for tests (`eval "$(pg-tmp)"`).
 - `claude-box` — host launcher (symlinked into `~/.local/bin`).

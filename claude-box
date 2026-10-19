@@ -103,6 +103,20 @@ done
 # (not just -e) so an unmounted, empty ~/mnt/BMRB isn't passed through.
 mountpoint -q "$HOME/mnt/BMRB" && mounts+=( -v "$HOME/mnt/BMRB:/projects/BMRB:ro" )
 
+# Share cargo's caches so the box doesn't re-download crates.io on every run
+# (the container filesystem is --rm). CARGO_HOME in the box is this same
+# absolute path (see the Containerfile), so these land exactly where cargo
+# looks. Only cache state is mounted, never the whole ~/.cargo: bin/ must stay
+# the image's rustup shims, and a `cargo login` token would live at the top
+# level too. .package-cache{,-mutate} are the lock files guarding registry/ and
+# git/, so sharing them keeps a host cargo and a box cargo from mutating the
+# same cache at once.
+for cargo_cache in registry git .package-cache .package-cache-mutate; do
+  if [ -e "$HOME/.cargo/$cargo_cache" ]; then
+    mounts+=( -v "$HOME/.cargo/$cargo_cache:$HOME/.cargo/$cargo_cache" )
+  fi
+done
+
 envs=( -e "TERM=${TERM:-xterm-256color}" )
 [ -n "${ANTHROPIC_API_KEY:-}" ] && envs+=( -e ANTHROPIC_API_KEY )
 
