@@ -174,6 +174,12 @@ ever needed in an arm64 box, Playwright's chromium does have Linux arm64 builds
   rather than your SSH key.
 - Your Claude login persists across runs because `~/.claude.json` is mounted
   read-write.
+- Because `~/.claude` is mounted, anything your host settings point at runs
+  inside the box too — including a custom `statusLine` command. Those hooks
+  execute against the *image's* PATH, not the host's, so the interpreters they
+  use have to exist here: `jq` is installed for exactly this reason (the
+  status-line script parses Claude's JSON with it). A helper that shells out to
+  something the image lacks fails silently and the status line just degrades.
 - The image sets `CLAUDE_BOX=1` as a cheap marker so Claude can tell it's in the
   sandbox (test `$CLAUDE_BOX`, no process spawned) — used by the global
   `~/.claude/CLAUDE.md` note to know that `pg-tmp` and the pre-baked toolchain

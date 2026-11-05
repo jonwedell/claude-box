@@ -17,12 +17,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 # git                     - repo operations
 # ripgrep                 - Claude's search tooling
 # less / procps           - pager + process tools Claude shells out to
+# jq                      - needed by ~/.claude/statusline.sh (mounted from the
+#                           host), which parses Claude's status-line JSON with it
 # ca-certificates/curl/gnupg - TLS + NodeSource setup
 # nodejs (22.x, NodeSource) - runtime for Claude Code
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg \
         python3.12 python3.12-venv python3-pip \
-        git ripgrep less procps \
+        git ripgrep less procps jq \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
