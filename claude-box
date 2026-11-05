@@ -24,11 +24,17 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 # Build on demand: explicit --rebuild, or automatically on first run. HOST_GIT_DIR
 # tells the image where ~/git lands (it's bind-mounted at the same absolute path),
 # which differs per host — the image uses it for UV_CACHE_DIR.
-build() { podman build --build-arg HOST_GIT_DIR="$GIT_DIR" -t "$IMAGE" "$SCRIPT_DIR"; }
+build() {
+  podman build --build-arg HOST_GIT_DIR="$GIT_DIR" "$@" -t "$IMAGE" "$SCRIPT_DIR"
+}
 
 if [ "${1:-}" = "--rebuild" ]; then
   shift
-  build
+  # An explicit --rebuild means "get me the current Claude Code". Nothing in the
+  # Containerfile changes when a new version is published, so the npm layer would
+  # otherwise stay cached forever and the box would keep an old `claude`. Feeding
+  # a fresh value for CLAUDE_CODE_REFRESH invalidates that layer (and only it).
+  build --build-arg CLAUDE_CODE_REFRESH="$(date +%s)"
 elif ! podman image exists "$IMAGE"; then
   echo "claude-box: building image (first run, this takes a minute)..." >&2
   build

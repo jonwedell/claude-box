@@ -156,7 +156,13 @@ RUN set -eux; \
 # Pre-create ~/.local/{bin,share/applications} owned by `ubuntu` so they stay
 # writable after the ~/.local/share/uv bind-mount (which otherwise leaves the
 # parent root-owned) — Chrome's first-run writes to share/applications.
-RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force \
+# CLAUDE_CODE_REFRESH exists purely to bust this layer's cache: the launcher
+# passes a timestamp on `claude-box --rebuild`, so a rebuild always picks up the
+# latest published version instead of reusing the npm layer from the first build
+# (which left the box pinned to an old `claude` that then nagged about upgrading).
+ARG CLAUDE_CODE_REFRESH=0
+RUN echo "claude-code refresh: ${CLAUDE_CODE_REFRESH}" \
+    && npm install -g @anthropic-ai/claude-code@latest && npm cache clean --force \
     && mkdir -p /home/ubuntu/.local/bin /home/ubuntu/.local/share/applications \
     && ln -sf "$(command -v claude)" /home/ubuntu/.local/bin/claude \
     && chown -R ubuntu:ubuntu /home/ubuntu/.local

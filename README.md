@@ -20,7 +20,7 @@ cd ~/git/<project>
 claude-box                 # launch Claude with --dangerously-skip-permissions
 claude-box "fix the bug"   # ... with an initial prompt
 claude-box bash            # shell inside the sandbox (poke around / debug)
-claude-box --rebuild       # rebuild the image after editing the Containerfile
+claude-box --rebuild       # rebuild the image (and upgrade Claude Code)
 ```
 
 `claude-box` refuses to run outside `~/git` so nothing else is ever exposed.
@@ -166,6 +166,24 @@ ever needed in an arm64 box, Playwright's chromium does have Linux arm64 builds
 - `box-entry` — container entrypoint (runs `claude` by default; `bash`/`shell` for a shell).
 - `pg-tmp` — spins up a throwaway PostgreSQL for tests (`eval "$(pg-tmp)"`).
 - `claude-box` — host launcher (symlinked into `~/.local/bin`).
+
+## Upgrading Claude Code
+
+Claude Code is baked into the image (`npm install -g @anthropic-ai/claude-code@latest`)
+and its auto-updater is disabled — it can't write to a root-owned global install
+from inside the box, so it would only warn and try to "repair" itself. Upgrading
+is therefore a rebuild:
+
+```sh
+claude-box --rebuild
+```
+
+`--rebuild` passes `--build-arg CLAUDE_CODE_REFRESH=<timestamp>`, which the
+`Containerfile` consumes in the npm layer purely to invalidate its cache. Without
+that, nothing in the `Containerfile` changes when a new version is published, so
+every layer is a cache hit and the box silently keeps the version from the first
+build — the rebuild looks like it worked while Claude's UI still asks you to
+upgrade. Layers before the npm step stay cached, so the rebuild is quick.
 
 ## Notes
 
