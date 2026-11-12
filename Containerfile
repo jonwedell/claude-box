@@ -180,9 +180,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ant-contrib is left out of the Java layer. pkg-config comes along because most
 # -sys crates shell out to it to find native libs; the libs themselves have to be
 # added here when a crate needs one, since there is no sudo in the box.
+# HOST_HOME is the host's $HOME, which differs per machine (/zdrive/work/home/jon
+# on the Linux box, /Users/jon on a Mac); the launcher passes it in with
+# --build-arg HOST_HOME="$HOME", same as HOST_GIT_DIR below. The default keeps a
+# bare `podman build .` working on the Linux box.
+ARG HOST_HOME=/zdrive/work/home/jon
 ARG RUST_VERSION=1.93.0
-ENV RUSTUP_HOME=/zdrive/work/home/jon/.rustup \
-    CARGO_HOME=/zdrive/work/home/jon/.cargo
+ENV RUSTUP_HOME=${HOST_HOME}/.rustup \
+    CARGO_HOME=${HOST_HOME}/.cargo
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh \
@@ -239,7 +244,7 @@ ENV DISABLE_AUTOUPDATER=1 \
     CLAUDE_BOX=1 \
     UV_CACHE_DIR=${HOST_GIT_DIR}/.cache/uv \
     CHROME_BIN=/usr/local/bin/chrome-headless \
-    PATH="/home/ubuntu/.local/bin:/zdrive/work/home/jon/.cargo/bin:${PATH}"
+    PATH="/home/ubuntu/.local/bin:${CARGO_HOME}/bin:${PATH}"
 
 COPY box-entry /usr/local/bin/box-entry
 RUN chmod +x /usr/local/bin/box-entry

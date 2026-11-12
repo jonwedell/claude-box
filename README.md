@@ -187,7 +187,10 @@ is the same host-path mirroring as `python3.12`/`php`/`java`, and here it buys
 warm builds: cargo's fingerprints hash the absolute paths of `rustc` and of the
 crate sources under `~/.cargo/registry`, so with the paths (and the pinned rustc)
 matching, a `target/` dir built on the host comes up `Fresh` in the box and vice
-versa, instead of triggering a full rebuild on every switch.
+versa, instead of triggering a full rebuild on every switch. Since `$HOME` is at
+a different absolute path on each machine, the launcher passes it to the build
+as `--build-arg HOST_HOME="$HOME"` (the same mechanism as `HOST_GIT_DIR` for
+the uv cache); a bare `podman build .` falls back to the Linux box's path.
 
 The launcher mounts the *cache* parts of the host's `~/.cargo` — `registry/`,
 `git/` and the `.package-cache*` lock files — into that same path, so the box

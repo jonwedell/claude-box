@@ -23,9 +23,12 @@ SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
 # Build on demand: explicit --rebuild, or automatically on first run. HOST_GIT_DIR
 # tells the image where ~/git lands (it's bind-mounted at the same absolute path),
-# which differs per host — the image uses it for UV_CACHE_DIR.
+# which differs per host — the image uses it for UV_CACHE_DIR. HOST_HOME likewise
+# tells it where the host's ~/.cargo and ~/.rustup live, so the Rust toolchain's
+# paths (and the cargo cache mounts below) line up with the host's.
 build() {
-  podman build --build-arg HOST_GIT_DIR="$GIT_DIR" "$@" -t "$IMAGE" "$SCRIPT_DIR"
+  podman build --build-arg HOST_GIT_DIR="$GIT_DIR" --build-arg HOST_HOME="$HOME" \
+    "$@" -t "$IMAGE" "$SCRIPT_DIR"
 }
 
 # Resolve npm's current Claude Code version into a --build-arg. Passing a concrete
