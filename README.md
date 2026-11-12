@@ -20,7 +20,7 @@ cd ~/git/<project>
 claude-box                 # launch Claude with --dangerously-skip-permissions
 claude-box "fix the bug"   # ... with an initial prompt
 claude-box bash            # shell inside the sandbox (poke around / debug)
-claude-box --rebuild       # rebuild the image after editing the Containerfile
+claude-box --rebuild       # rebuild the image (and upgrade Claude Code)
 ```
 
 `claude-box` refuses to run outside `~/git` so nothing else is ever exposed.
@@ -29,8 +29,9 @@ claude-box --rebuild       # rebuild the image after editing the Containerfile
 
 The image bakes in a specific Claude Code version, so launches are fast and
 reproducible — Claude's own auto-updater is disabled (it can't write the
-root-owned global install from inside the non-root container anyway). To move to
-the newest release, just rebuild:
+root-owned global install from inside the non-root container anyway, so it
+would only warn and try to "repair" itself). To move to the newest release,
+just rebuild:
 
 ```sh
 claude-box --rebuild
@@ -42,6 +43,13 @@ layer (near the end of the build) is invalidated — the rebuild is quick, not a
 from-scratch image build. A plain `podman build` (no launcher) defaults the arg
 to `@latest`.
 
+If the host has no `npm` (or is offline), `--rebuild` instead passes
+`--build-arg CLAUDE_CODE_REFRESH=<timestamp>`, which the `Containerfile`
+consumes in the npm layer purely to invalidate its cache. Without that, nothing
+in the `Containerfile` changes when a new version is published, so every layer
+is a cache hit and the box silently keeps the version from the first build —
+the rebuild looks like it worked while Claude's UI still asks you to upgrade.
+
 On every launch the launcher does a throttled (once/24h) check against npm and,
 if the box is behind, prints a one-line nudge:
 
@@ -52,18 +60,55 @@ claude-box: Claude Code 2.1.221 available (box has 2.1.220). Run `claude-box --r
 The check is best-effort: it's skipped silently when npm is unavailable or
 you're offline, and never blocks or fails the launch.
 
+## Hosts / architecture
+
+Built and used on a **Linux/amd64** host; it also builds and runs on **macOS /
+Apple Silicon (arm64)** via `podman machine`, with two differences the
+`Containerfile` handles by checking `dpkg --print-architecture`:
+
+| | Linux amd64 | macOS arm64 |
+| --- | --- | --- |
+| Google Chrome | installed | **skipped** — Google publishes no Linux arm64 build, and noble's `chromium-browser` is only a snap stub. `chrome-headless` exits 127 with an explanation. |
+| Python 2.7 jammy `.deb`s | `archive`/`security.ubuntu.com` | `ports.ubuntu.com/ubuntu-ports` (arm64 and the other ports live there, not on `archive`) |
+
+Everything else — python3.12, node, PHP, PostgreSQL, the build toolchain, uv —
+is arch-independent and behaves the same. File ownership works on macOS too:
+podman machine maps container UID 1000 back to your macOS UID, so files Claude
+writes under `~/git` still show up owned by you.
+
+One macOS-only wrinkle worth knowing about, since the fix looks like a
+pointless detour otherwise: the launcher does **not** use `podman run -w "$PWD"`.
+On macOS podman pre-creates the workdir as root inside the container's mount
+namespace, so that single directory stats as `uid 0` while everything around it
+is `uid 1000` — and git then refuses the very repo you're standing in with
+`detected dubious ownership`. Instead the launcher passes `CLAUDE_BOX_CWD` and
+`box-entry` cds into it, which avoids the anomaly and is a no-op difference on
+Linux.
+
 ## Python / venvs
 
 The image is **Ubuntu 24.04** specifically so `python3.12` lives at
-`/usr/bin/python3.12` — the same path your host used to create its venvs.
-That means `source venv/bin/activate` works unchanged inside the box for the
-Flask projects. `python3.12-venv` and `pip` are installed so new venvs can be
-created in-container too.
+`/usr/bin/python3.12` — the same path the **Linux** host used to create its
+venvs. That means `source venv/bin/activate` works unchanged inside the box for
+the Flask projects. `python3.12-venv` and `pip` are installed so new venvs can
+be created in-container too.
+
+That venv-sharing trick is Linux-only. Each machine has its own `~/git`
+checkouts (nothing is shared between them), and on a Mac those working copies
+hold **mac-native** venvs: the interpreter is at
+`/Library/Frameworks/Python.framework/...` and the wheels are Mach-O
+(`macosx-*-universal2`), so the Linux box can't use them — and a venv built
+inside the box is equally useless to the macOS host. This is a host-vs-box split
+on the same machine, not a cross-machine one. Give the box its own venv under a
+different name (e.g. `.venv-box`, gitignored) rather than letting the two fight
+over one `.venv`; `uv` handles it cleanly, since `uv run`/`uv sync` rebuild the
+environment from `uv.lock` on demand.
 
 ### Python 2
 
 Ubuntu 24.04 removed Python 2 from its own repos, so `python2.7` (plus `python2`
-and `pip2`) is pulled from **jammy** (22.04)'s `.deb`s — version
+and `pip2`) is pulled from **jammy** (22.04)'s `.deb`s (from `archive.ubuntu.com`
+on amd64, `ports.ubuntu.com` on arm64 — see above) — version
 `2.7.18-13ubuntu1.5` — which is patched for OpenSSL 3.0. Both jammy and noble
 ship `libssl3`, so `ssl`/`hashlib` work (a from-source 2.7.18 build would not,
 as upstream 2.7 predates OpenSSL 3.0). The only friction is noble's `time_t64`
@@ -82,7 +127,10 @@ across layers risks a version skew.
 `uv` (pinned to the host's 0.7.19) and `uvx` are also installed. uv's managed
 Pythons (`~/.local/share/uv`) are shared into the box, and uv's package cache
 is relocated to `~/git/.cache/uv` (set via `UV_CACHE_DIR` in the image and
-`~/.config/uv/uv.toml` on the host). Because that puts the cache on the same
+`~/.config/uv/uv.toml` on the host). Since your `~/git` is at a different
+absolute path on each machine, the launcher passes it to the build as
+`--build-arg HOST_GIT_DIR="$GIT_DIR"`; a bare `podman build .` falls back to the
+Linux box's path. Because that puts the cache on the same
 `~/git` bind-mount as project `.venv`s, uv can **hardlink** wheels into venvs
 (fast) both inside and outside the box, instead of falling back to copying.
 Venvs on the system
@@ -193,7 +241,7 @@ plus `Python.h` from `python3.12-dev` (or `python2.7-dev` for the py2 build).
 anything else a source build needs has to be added to the `Containerfile`
 followed by a `claude-box --rebuild`.
 
-## Browser tests (Chrome)
+## Browser tests (Chrome) — amd64 only
 
 Google Chrome (matching the host version) is installed for browser-based tests
 such as nmrhub's Angular/Karma unit tests. `CHROME_BIN` points at a shim
@@ -205,6 +253,11 @@ run use Angular's non-watch flag, e.g. from `frontend/`:
 ```sh
 npm test -- --watch=false      # or: ng test --watch=false
 ```
+
+On an arm64 host Chrome is absent (see the arch table above) and the shim exits
+127 with a note. Run browser tests on the host or on the Linux box; if they're
+ever needed in an arm64 box, Playwright's chromium does have Linux arm64 builds
+(`npx playwright install --with-deps chromium`) and could back the shim.
 
 ## Files
 
@@ -220,6 +273,12 @@ npm test -- --watch=false      # or: ng test --watch=false
   rather than your SSH key.
 - Your Claude login persists across runs because `~/.claude.json` is mounted
   read-write.
+- Because `~/.claude` is mounted, anything your host settings point at runs
+  inside the box too — including a custom `statusLine` command. Those hooks
+  execute against the *image's* PATH, not the host's, so the interpreters they
+  use have to exist here: `jq` is installed for exactly this reason (the
+  status-line script parses Claude's JSON with it). A helper that shells out to
+  something the image lacks fails silently and the status line just degrades.
 - The image sets `CLAUDE_BOX=1` as a cheap marker so Claude can tell it's in the
   sandbox (test `$CLAUDE_BOX`, no process spawned) — used by the global
   `~/.claude/CLAUDE.md` note to know that `pg-tmp` and the pre-baked toolchain

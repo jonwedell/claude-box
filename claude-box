@@ -21,6 +21,13 @@ HOMEDIR="/home/ubuntu"   # in-container home (Ubuntu 24.04 'ubuntu' user, UID 10
 # symlinked into ~/.local/bin) — otherwise --rebuild can't find the Containerfile.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 
+# Build on demand: explicit --rebuild, or automatically on first run. HOST_GIT_DIR
+# tells the image where ~/git lands (it's bind-mounted at the same absolute path),
+# which differs per host — the image uses it for UV_CACHE_DIR.
+build() {
+  podman build --build-arg HOST_GIT_DIR="$GIT_DIR" "$@" -t "$IMAGE" "$SCRIPT_DIR"
+}
+
 # Resolve npm's current Claude Code version into a --build-arg. Passing a concrete
 # version (rather than letting the Containerfile default to @latest) is what busts
 # the Claude layer's build cache when a new release exists, so --rebuild actually
@@ -33,15 +40,23 @@ claude_build_arg() {
   [ -n "$ver" ] && printf -- '--build-arg\nCLAUDE_VERSION=%s\n' "$ver"
 }
 
-# Build on demand: explicit --rebuild, or automatically on first run.
 if [ "${1:-}" = "--rebuild" ]; then
   shift
   mapfile -t _ba < <(claude_build_arg)
-  podman build "${_ba[@]}" -t "$IMAGE" "$SCRIPT_DIR"
+  if [ "${#_ba[@]}" -eq 0 ]; then
+    # Couldn't resolve a version (no npm on this host, or offline). An explicit
+    # --rebuild still means "get me the current Claude Code", and nothing in the
+    # Containerfile changes when a new version is published, so the npm layer
+    # would otherwise stay cached forever and the box would keep an old `claude`.
+    # Feeding a fresh value for CLAUDE_CODE_REFRESH invalidates that layer (and
+    # only it).
+    _ba=( --build-arg "CLAUDE_CODE_REFRESH=$(date +%s)" )
+  fi
+  build "${_ba[@]}"
 elif ! podman image exists "$IMAGE"; then
   echo "claude-box: building image (first run, this takes a minute)..." >&2
   mapfile -t _ba < <(claude_build_arg)
-  podman build "${_ba[@]}" -t "$IMAGE" "$SCRIPT_DIR"
+  build "${_ba[@]}"
 fi
 
 # Startup update nudge (throttled to once/24h): if npm has a newer Claude Code
@@ -117,12 +132,17 @@ for cargo_cache in registry git .package-cache .package-cache-mutate; do
   fi
 done
 
-envs=( -e "TERM=${TERM:-xterm-256color}" )
+# The cwd is handed over as an env var and box-entry cds into it, rather than
+# using `podman run -w "$PWD"`. On macOS, podman pre-creates the workdir as root
+# in the container's mount namespace, so the one directory named by -w stats as
+# uid 0 inside the box even though everything around it is uid 1000 — enough for
+# git to reject the repo you're standing in with "detected dubious ownership".
+# cd-ing in the entrypoint sidesteps that and behaves identically on Linux.
+envs=( -e "TERM=${TERM:-xterm-256color}" -e "CLAUDE_BOX_CWD=$PWD" )
 [ -n "${ANTHROPIC_API_KEY:-}" ] && envs+=( -e ANTHROPIC_API_KEY )
 
 exec podman run --rm -it \
   --userns=keep-id \
   "${mounts[@]}" \
   "${envs[@]}" \
-  -w "$PWD" \
   "$IMAGE" "$@"
